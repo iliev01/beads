@@ -31,26 +31,28 @@ func (s *DoltStore) RunInTransaction(ctx context.Context, fn func(tx storage.Tra
 }
 
 func (s *DoltStore) runDoltTransaction(ctx context.Context, fn func(tx storage.Transaction) error) error {
-	sqlTx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-
-	tx := &doltTransaction{tx: sqlTx, store: s}
-
-	defer func() {
-		if r := recover(); r != nil {
-			_ = sqlTx.Rollback() // Best effort rollback on error path
-			panic(r)
+	return wrapLockError(s.withRetry(ctx, func() error {
+		sqlTx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return err
 		}
-	}()
 
-	if err := fn(tx); err != nil {
-		_ = sqlTx.Rollback() // Best effort rollback on error path
-		return err
-	}
+		tx := &doltTransaction{tx: sqlTx, store: s}
 
-	return sqlTx.Commit()
+		defer func() {
+			if r := recover(); r != nil {
+				_ = sqlTx.Rollback()
+				panic(r)
+			}
+		}()
+
+		if err := fn(tx); err != nil {
+			_ = sqlTx.Rollback()
+			return err
+		}
+
+		return sqlTx.Commit()
+	}))
 }
 
 // CreateIssue creates an issue within the transaction.
