@@ -764,3 +764,124 @@ func TestSlotAgentLabelCheck(t *testing.T) {
 		t.Fatalf("runSlotShow should accept task-type agent with gt:agent label, got: %v", err)
 	}
 }
+
+// TestRoutingSkipsLocalPhantomCopy verifies that when an issue exists in BOTH
+// the local (HQ) database and the routed rig database, resolveAndGetIssueWithRouting
+// returns the rig copy — not the local phantom. This is a regression test for bd-7vk:
+// `bd close` from town root closed a phantom copy in HQ instead of the canonical
+// rig copy.
+//
+// NOTE: This test uses os.Chdir and cannot run in parallel with other tests.
+func TestRoutingSkipsLocalPhantomCopy(t *testing.T) {
+	ctx := context.Background()
+
+	// Directory structure:
+	// tmpDir/
+	//   .beads/
+	//     dolt (town/HQ database — has phantom copy with stale title)
+	//     routes.jsonl (bd- routes to rig/)
+	//   rig/
+	//     .beads/
+	//       dolt (rig database — has canonical copy with correct title)
+	tmpDir := t.TempDir()
+
+	townBeadsDir := filepath.Join(tmpDir, ".beads")
+	if err := os.MkdirAll(townBeadsDir, 0755); err != nil {
+		t.Fatalf("create town beads dir: %v", err)
+	}
+
+	rigBeadsDir := filepath.Join(tmpDir, "rig", ".beads")
+	if err := os.MkdirAll(rigBeadsDir, 0755); err != nil {
+		t.Fatalf("create rig beads dir: %v", err)
+	}
+
+	// Both databases use prefix "bd" so the same ID can exist in both
+	townDBPath := filepath.Join(townBeadsDir, "dolt")
+	townStore := newTestStoreWithPrefix(t, townDBPath, "bd")
+
+	rigDBPath := filepath.Join(rigBeadsDir, "dolt")
+	rigStore := newTestStoreWithPrefix(t, rigDBPath, "bd")
+
+	issueID := "bd-phantom-test"
+
+	// Create a phantom copy in town/HQ with a stale title
+	phantom := &types.Issue{
+		ID:        issueID,
+		Title:     "PHANTOM (stale HQ copy)",
+		IssueType: types.TypeBug,
+		Status:    types.StatusOpen,
+	}
+	if err := townStore.CreateIssue(ctx, phantom, "test"); err != nil {
+		t.Fatalf("create phantom issue: %v", err)
+	}
+
+	// Create the canonical copy in the rig with the correct title
+	canonical := &types.Issue{
+		ID:        issueID,
+		Title:     "CANONICAL (rig copy)",
+		IssueType: types.TypeBug,
+		Status:    types.StatusOpen,
+	}
+	if err := rigStore.CreateIssue(ctx, canonical, "test"); err != nil {
+		t.Fatalf("create canonical issue: %v", err)
+	}
+
+	// Close rig store to release Dolt lock before routing opens it
+	rigStore.Close()
+
+	// Route bd- prefix to rig/
+	routesPath := filepath.Join(townBeadsDir, "routes.jsonl")
+	if err := os.WriteFile(routesPath, []byte(`{"prefix":"bd-","path":"rig"}`), 0644); err != nil {
+		t.Fatalf("write routes.jsonl: %v", err)
+	}
+
+	// Set up global state: local store is town/HQ
+	oldDbPath := dbPath
+	dbPath = townDBPath
+	t.Cleanup(func() { dbPath = oldDbPath })
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWd) })
+
+	// Test resolveAndGetIssueWithRouting: should return rig copy, not phantom
+	result, err := resolveAndGetIssueWithRouting(ctx, townStore, issueID)
+	if err != nil {
+		t.Fatalf("resolveAndGetIssueWithRouting failed: %v", err)
+	}
+	if result == nil || result.Issue == nil {
+		t.Fatal("resolveAndGetIssueWithRouting returned nil")
+	}
+	defer result.Close()
+
+	if !result.Routed {
+		t.Error("expected result.Routed=true (should use rig, not local HQ)")
+	}
+	if result.Issue.Title != "CANONICAL (rig copy)" {
+		t.Errorf("got title %q, want %q — local phantom was returned instead of routed canonical copy",
+			result.Issue.Title, "CANONICAL (rig copy)")
+	}
+
+	// Test getIssueWithRouting: same behavior expected
+	result2, err := getIssueWithRouting(ctx, townStore, issueID)
+	if err != nil {
+		t.Fatalf("getIssueWithRouting failed: %v", err)
+	}
+	if result2 == nil || result2.Issue == nil {
+		t.Fatal("getIssueWithRouting returned nil")
+	}
+	defer result2.Close()
+
+	if !result2.Routed {
+		t.Error("getIssueWithRouting: expected Routed=true")
+	}
+	if result2.Issue.Title != "CANONICAL (rig copy)" {
+		t.Errorf("getIssueWithRouting: got title %q, want %q",
+			result2.Issue.Title, "CANONICAL (rig copy)")
+	}
+}
