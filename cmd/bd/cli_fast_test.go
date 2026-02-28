@@ -1272,3 +1272,33 @@ func TestCLI_CommentsAddShortID(t *testing.T) {
 		}
 	})
 }
+
+// TestCLI_CreateRejectsDashTitle verifies that positional titles starting with '-'
+// are rejected as likely misinterpreted flags (bd-2c0).
+func TestCLI_CreateRejectsDashTitle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow CLI test in short mode")
+	}
+
+	tmpDir := createTempDirWithCleanup(t)
+	runBDExec(t, tmpDir, "init", "--prefix", "test", "--quiet")
+
+	// These should all fail with "looks like a flag" error
+	flagLikeTitles := []string{"--help", "--version", "-p", "--foo-bar"}
+	for _, title := range flagLikeTitles {
+		out, err := runBDExecAllowErrorWithEnv(t, tmpDir, os.Environ(), "create", title)
+		if err == nil {
+			t.Errorf("bd create %q should have failed but succeeded: %s", title, out)
+			continue
+		}
+		if !strings.Contains(out, "looks like a flag") {
+			t.Errorf("bd create %q: expected 'looks like a flag' error, got: %s", title, out)
+		}
+	}
+
+	// --title flag should still accept dash-prefixed values
+	out := runBDExec(t, tmpDir, "create", "--title=--help-wanted", "--json")
+	if !strings.Contains(out, "--help-wanted") {
+		t.Errorf("--title flag should accept dash-prefixed values, got: %s", out)
+	}
+}

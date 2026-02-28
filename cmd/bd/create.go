@@ -59,6 +59,11 @@ var createCmd = &cobra.Command{
 			}
 			title = args[0] // They're the same, use either
 		} else if len(args) > 0 {
+			// Guard: reject positional titles starting with '-' as likely misinterpreted flags.
+			// Use --title="--help" if you genuinely want a dash-prefixed title.
+			if strings.HasPrefix(args[0], "-") {
+				FatalError("positional title %q looks like a flag\n  If this is intentional, use: bd create --title=%q", args[0], args[0])
+			}
 			title = args[0]
 		} else if titleFlag != "" {
 			title = titleFlag
