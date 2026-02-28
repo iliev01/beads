@@ -776,7 +776,7 @@ func (s *DoltStore) IsBlocked(ctx context.Context, issueID string) (bool, []stri
 		JOIN issues i ON d.depends_on_id = i.id
 		WHERE d.issue_id = ?
 		  AND d.type = 'blocks'
-		  AND i.status IN ('open', 'in_progress', 'blocked', 'deferred', 'hooked')
+		  AND i.status NOT IN ('closed', 'pinned')
 	`, issueID)
 	if err != nil {
 		return false, nil, fmt.Errorf("failed to check blockers: %w", err)
@@ -831,7 +831,7 @@ func (s *DoltStore) GetNewlyUnblockedByClose(ctx context.Context, closedIssueID 
 		JOIN issues i ON d.issue_id = i.id
 		WHERE d.depends_on_id = ?
 		  AND d.type = 'blocks'
-		  AND i.status IN ('open', 'blocked')
+		  AND i.status NOT IN ('closed', 'pinned')
 	`, closedIssueID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find blocked candidates: %w", err)
@@ -874,7 +874,7 @@ func (s *DoltStore) GetNewlyUnblockedByClose(ctx context.Context, closedIssueID 
 		WHERE d2.issue_id IN (%s)
 		  AND d2.type = 'blocks'
 		  AND d2.depends_on_id != ?
-		  AND blocker.status IN ('open', 'in_progress', 'blocked', 'deferred', 'hooked')
+		  AND blocker.status NOT IN ('closed', 'pinned')
 	`, inClause)
 
 	blockedRows, err := s.queryContext(ctx, stillBlockedQuery, args...)

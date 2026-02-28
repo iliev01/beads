@@ -678,4 +678,127 @@ func TestAddDependency_MultipleExternalReferences(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// Custom status visibility regression tests (bd-1x0)
+// =============================================================================
+
+// TestIsBlocked_CustomStatusBlocker verifies that an issue blocked by a blocker
+// with a custom status (e.g. "review") is correctly identified as blocked.
+// Regression test for bd-1x0: hardcoded status IN lists made custom statuses invisible.
+func TestIsBlocked_CustomStatusBlocker(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx, cancel := testContext(t)
+	defer cancel()
+
+	// Create a blocker with a custom status
+	blocker := &types.Issue{
+		ID:        "cs-blocker",
+		Title:     "Custom Status Blocker",
+		Status:    types.StatusOpen,
+		Priority:  1,
+		IssueType: types.TypeTask,
+	}
+	blocked := &types.Issue{
+		ID:        "cs-blocked",
+		Title:     "Blocked by Custom",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+	}
+
+	for _, iss := range []*types.Issue{blocker, blocked} {
+		if err := store.CreateIssue(ctx, iss, "tester"); err != nil {
+			t.Fatalf("failed to create issue: %v", err)
+		}
+	}
+
+	dep := &types.Dependency{
+		IssueID:     blocked.ID,
+		DependsOnID: blocker.ID,
+		Type:        types.DepBlocks,
+	}
+	if err := store.AddDependency(ctx, dep, "tester"); err != nil {
+		t.Fatalf("failed to add dependency: %v", err)
+	}
+
+	// Set blocker to custom status "review"
+	if err := store.UpdateIssue(ctx, blocker.ID, map[string]interface{}{"status": "review"}, "tester"); err != nil {
+		t.Fatalf("failed to set custom status: %v", err)
+	}
+
+	// The blocked issue should still be blocked — "review" is not a terminal status
+	isBlocked, blockers, err := store.IsBlocked(ctx, blocked.ID)
+	if err != nil {
+		t.Fatalf("IsBlocked failed: %v", err)
+	}
+	if !isBlocked {
+		t.Error("issue should be blocked by blocker with custom status 'review'")
+	}
+	if len(blockers) == 0 {
+		t.Error("expected at least one blocker ID")
+	}
+}
+
+// TestGetNewlyUnblockedByClose_CustomStatusDependent verifies that an issue
+// with a custom status is considered as a candidate for unblocking when its
+// blocker is closed.
+// Regression test for bd-1x0.
+func TestGetNewlyUnblockedByClose_CustomStatusDependent(t *testing.T) {
+	store, cleanup := setupTestStore(t)
+	defer cleanup()
+
+	ctx, cancel := testContext(t)
+	defer cancel()
+
+	blocker := &types.Issue{
+		ID:        "cs-unb-blocker",
+		Title:     "Blocker",
+		Status:    types.StatusOpen,
+		Priority:  1,
+		IssueType: types.TypeTask,
+	}
+	customDependent := &types.Issue{
+		ID:        "cs-unb-dep",
+		Title:     "Custom Status Dependent",
+		Status:    types.StatusOpen,
+		Priority:  2,
+		IssueType: types.TypeTask,
+	}
+
+	for _, iss := range []*types.Issue{blocker, customDependent} {
+		if err := store.CreateIssue(ctx, iss, "tester"); err != nil {
+			t.Fatalf("failed to create issue: %v", err)
+		}
+	}
+
+	dep := &types.Dependency{
+		IssueID:     customDependent.ID,
+		DependsOnID: blocker.ID,
+		Type:        types.DepBlocks,
+	}
+	if err := store.AddDependency(ctx, dep, "tester"); err != nil {
+		t.Fatalf("failed to add dependency: %v", err)
+	}
+
+	// Set the dependent to a custom status
+	if err := store.UpdateIssue(ctx, customDependent.ID, map[string]interface{}{"status": "review"}, "tester"); err != nil {
+		t.Fatalf("failed to set custom status: %v", err)
+	}
+
+	// Close the blocker — the custom-status dependent should become unblocked
+	unblocked, err := store.GetNewlyUnblockedByClose(ctx, blocker.ID)
+	if err != nil {
+		t.Fatalf("GetNewlyUnblockedByClose failed: %v", err)
+	}
+
+	if len(unblocked) != 1 {
+		t.Fatalf("expected 1 newly unblocked issue, got %d", len(unblocked))
+	}
+	if unblocked[0].ID != customDependent.ID {
+		t.Errorf("expected %q to be unblocked, got %q", customDependent.ID, unblocked[0].ID)
+	}
+}
+
 // Note: testContext is already defined in dolt_test.go for this package

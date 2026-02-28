@@ -558,7 +558,7 @@ func (s *DoltStore) GetBlockedIssues(ctx context.Context, filter types.WorkFilte
 	activeIDs := make(map[string]bool)
 	activeRows, err := s.queryContext(ctx, `
 		SELECT id FROM issues
-		WHERE status IN ('open', 'in_progress', 'blocked', 'deferred', 'hooked')
+		WHERE status NOT IN ('closed', 'pinned')
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get active issues: %w", err)
@@ -911,7 +911,7 @@ func (s *DoltStore) computeBlockedIDs(ctx context.Context) ([]string, error) {
 	activeIDs := make(map[string]bool)
 	activeRows, err := s.queryContext(ctx, `
 		SELECT id FROM issues
-		WHERE status IN ('open', 'in_progress', 'blocked', 'deferred', 'hooked')
+		WHERE status NOT IN ('closed', 'pinned')
 	`)
 	if err != nil {
 		return nil, wrapQueryError("compute blocked IDs: get active issues", err)
